@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>我的生活管家</title>
+<style>
+  :root {
+    --bg: #f6f7fb; --card: #fff; --text: #222; --muted: #777; --line: #e6e8ef;
+    --main: #4f7cff; --ok: #2fb67c; --warn: #f0a020; --bad: #e5484d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161c; --card: #1e212a; --text: #eceef3; --muted: #9aa0ae; --line: #2b2f3a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+  header { padding: 20px 16px 8px; max-width: 720px; margin: 0 auto; }
+  header h1 { margin: 0; font-size: 22px; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  nav { position: sticky; top: 0; background: var(--bg); z-index: 5; display: flex; gap: 6px;
+        overflow-x: auto; padding: 8px 16px; max-width: 720px; margin: 0 auto; }
+  nav button { flex: 0 0 auto; border: 1px solid var(--line); background: var(--card); color: var(--text);
+               padding: 8px 14px; border-radius: 999px; font-size: 15px; cursor: pointer; }
+  nav button.on { background: var(--main); border-color: var(--main); color: #fff; }
+  main { max-width: 720px; margin: 0 auto; padding: 8px 16px 80px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+  .card h2 { margin: 0 0 10px; font-size: 17px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row + .row { margin-top: 8px; }
+  input, select { font: inherit; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px;
+                  background: var(--bg); color: var(--text); min-width: 0; }
+  input[type=text], input:not([type]) { flex: 1; }
+  .btn { border: 0; background: var(--main); color: #fff; padding: 9px 14px; border-radius: 10px; font: inherit; cursor: pointer; white-space: nowrap; }
+  .btn.ghost { background: transparent; color: var(--muted); padding: 4px 8px; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .item:first-of-type { border-top: 0; }
+  .item .t { flex: 1; word-break: break-word; }
+  .item.done .t { text-decoration: line-through; color: var(--muted); }
+  .item input[type=checkbox] { width: 20px; height: 20px; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .tag.hot { color: var(--bad); border-color: var(--bad); }
+  .tag.soon { color: var(--warn); border-color: var(--warn); }
+  .muted { color: var(--muted); font-size: 14px; }
+  .big { font-size: 26px; font-weight: 700; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .stats div { background: var(--bg); border-radius: 10px; padding: 10px 4px; }
+  .empty { color: var(--muted); text-align: center; padding: 14px 0; }
+  .streak { color: var(--warn); font-weight: 600; }
+  textarea { width: 100%; min-height: 70px; font: inherit; padding: 9px 10px; border: 1px solid var(--line);
+             border-radius: 10px; background: var(--bg); color: var(--text); resize: vertical; }
+  .bar { height: 8px; background: var(--bg); border-radius: 99px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="hello">我的生活管家</h1>
+  <p id="today"></p>
+</header>
+<nav id="nav"></nav>
+<main id="main"></main>
+
+<script>
+const KEY = "lifemanager.v1";
+const TABS = [["home","今天"],["todo","待辦"],["money","記帳"],["habit","習慣"],["dates","重要日子"],["notes","筆記"],["data","備份"]];
+const CATS = ["飲食","交通","日用品","娛樂","居住","醫療","其他"];
+
+let db = load();
+let tab = "home";
+
+function load() {
+  try { return Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); }
+  catch { return blank(); }
+}
+function blank() { return { todos: [], expenses: [], habits: [], dates: [], notes: [], budget: 0 }; }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch {} }
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function ymd(d = new Date()) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function daysFrom(dateStr) {
+  const a = new Date(ymd() + "T00:00:00"), b = new Date(dateStr + "T00:00:00");
+  return Math.round((b - a) / 86400000);
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function $(id) { return document.getElementById(id); }
+function val(id) { return $(id).value.trim(); }
+
+/* ---------- 重要日子：生日/紀念日每年重複，算出下一次是幾天後 ---------- */
+function nextOccurrence(d) {
+  if (!d.yearly) return d.date;
+  const [, m, day] = d.date.split("-");
+  let y = new Date().getFullYear();
+  let s = `${y}-${m}-${day}`;
+  if (daysFrom(s) < 0) s = `${y + 1}-${m}-${day}`;
+  return s;
+}
+function untilLabel(n) { return n === 0 ? "就是今天！" : n > 0 ? `還有 ${n} 天` : `已過 ${-n} 天`; }
+
+/* ---------- 習慣：算連續打卡天數 ---------- */
+function streak(h) {
+  let n = 0, d = new Date();
+  if (!h.log.includes(ymd(d))) d.setDate(d.getDate() - 1); // 今天還沒打卡不算斷
+  while (h.log.includes(ymd(d))) { n++; d.setDate(d.getDate() - 1); }
+  return n;
+}
+
+/* ---------- 畫面 ---------- */
+function render() {
+  const h = new Date().getHours();
+  $("hello").textContent = (h < 11 ? "早安 ☀️" : h < 18 ? "午安 🌤️" : "晚安 🌙") + "，今天也辛苦了";
+  $("today").textContent = new Date().toLocaleDateString("zh-TW", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
+  $("nav").innerHTML = TABS.map(([k, n]) => `<button class="${k === tab ? "on" : ""}" onclick="go('${k}')">${n}</button>`).join("");
+  $("main").innerHTML = ({ home, todo, money, habit, dates, notes, data })[tab]();
+}
+function go(t) { tab = t; render(); window.scrollTo(0, 0); }
+function act(fn) { fn(); save(); render(); }
+
+/* ---------- 今天 ---------- */
+function home() {
+  const today = ymd();
+  const openTodos = db.todos.filter(t => !t.done);
+  const due = openTodos.filter(t => t.due && t.due <= today);
+  const hs = db.habits;
+  const hDone = hs.filter(x => x.log.includes(today)).length;
+  const month = today.slice(0, 7);
+  const spent = db.expenses.filter(e => e.date.startsWith(month)).reduce((s, e) => s + e.amount, 0);
+  const upcoming = db.dates.map(d => ({ ...d, n: daysFrom(nextOccurrence(d)) }))
+    .filter(d => d.n >= 0 && d.n <= 14).sort((a, b) => a.n - b.n);
+
+  return `
+  <div class="card"><h2>今天的重點</h2>
+    <div class="stats">
+      <div><div class="big">${due.length}</div><div class="muted">今天要做</div></div>
+      <div><div class="big">${hDone}/${hs.length}</div><div class="muted">習慣打卡</div></div>
+      <div><div class="big">${spent.toLocaleString()}</div><div class="muted">本月花費</div></div>
+    </div>
+  </div>
+  <div class="card"><h2>今天到期 / 已逾期的待辦</h2>
+    ${due.length ? due.map(todoRow).join("") : `<div class="empty">沒有到期的事，輕鬆一下 🎉</div>`}
+  </div>
+  <div class="card"><h2>兩週內的重要日子</h2>
+    ${upcoming.length ? upcoming.map(d => `<div class="item"><span class="t">${esc(d.name)}</span><span class="tag ${d.n <= 3 ? "hot" : "soon"}">${untilLabel(d.n)}</span></div>`).join("")
+      : `<div class="empty">近期沒有特別的日子</div>`}
+  </div>
+  <div class="card"><h2>今天的習慣</h2>
+    ${hs.length ? hs.map(habitRow).join("") : `<div class="empty">到「習慣」頁新增一個吧</div>`}
+  </div>`;
+}
+
+/* ---------- 待辦 ---------- */
+function todoRow(t) {
+  let tag = "";
+  if (t.due) {
+    const n = daysFrom(t.due);
+    tag = `<span class="tag ${n < 0 ? "hot" : n <= 2 ? "soon" : ""}">${n < 0 ? "逾期 " + -n + " 天" : n === 0 ? "今天" : t.due.slice(5)}</span>`;
+  }
+  return `<div class="item ${t.done ? "done" : ""}">
+    <input type="checkbox" ${t.done ? "checked" : ""} onchange="act(()=>toggleTodo('${t.id}'))">
+    <span class="t">${esc(t.text)}</span>${tag}
+    <button class="btn ghost" onclick="act(()=>delItem('todos','${t.id}'))">刪除</button></div>`;
+}
+function toggleTodo(id) { const t = db.todos.find(x => x.id === id); t.done = !t.done; }
+function delItem(list, id) { db[list] = db[list].filter(x => x.id !== id); }
+function addTodo() {
+  const text = val("todoText"); if (!text) return;
+  act(() => db.todos.unshift({ id: uid(), text, due: $("todoDue").value, done: false }));
+}
+function todo() {
+  const open = db.todos.filter(t => !t.done).sort((a, b) => (a.due || "9999") .localeCompare(b.due || "9999"));
+  const done = db.todos.filter(t => t.done);
+  return `
+  <div class="card"><h2>新增待辦</h2>
+    <div class="row"><input id="todoText" placeholder="例如：繳電話費" onkeydown="if(event.key==='Enter')addTodo()"></div>
+    <div class="row"><input type="date" id="todoDue"><span class="muted">（到期日可不填）</span><button class="btn" style="margin-left:auto" onclick="addTodo()">加入</button></div>
+  </div>
+  <div class="card"><h2>要做的事（${open.length}）</h2>${open.length ? open.map(todoRow).join("") : `<div class="empty">全部做完了 👏</div>`}</div>
+  ${done.length ? `<div class="card"><h2>已完成（${done.length}）</h2>${done.map(todoRow).join("")}
+    <div class="row"><button class="btn ghost" onclick="act(()=>db.todos=db.todos.filter(t=>!t.done))">清掉已完成</button></div></div>` : ""}`;
+}
+
+/* ---------- 記帳 ---------- */
+function addExpense() {
+  const amount = parseFloat($("exAmt").value); if (!(amount > 0)) return;
+  act(() => db.expenses.unshift({ id: uid(), amount, cat: $("exCat").value, note: val("exNote"), date: $("exDate").value || ymd() }));
+}
+function setBudget() { act(() => db.budget = parseFloat($("budget").value) || 0); }
+function money() {
+  const month = ymd().slice(0, 7);
+  const list = db.expenses.filter(e => e.date.startsWith(month));
+  const total = list.reduce((s, e) => s + e.amount, 0);
+  const by = {};
+  list.forEach(e => by[e.cat] = (by[e.cat] || 0) + e.amount);
+  const pct = db.budget ? Math.min(100, total / db.budget * 100) : 0;
+  const left = db.budget - total;
+  return `
+  <div class="card"><h2>記一筆</h2>
+    <div class="row"><input type="number" id="exAmt" placeholder="金額" inputmode="decimal" style="width:110px;flex:none">
+      <select id="exCat">${CATS.map(c => `<option>${c}</option>`).join("")}</select></div>
+    <div class="row"><input id="exNote" placeholder="備註（可不填）"><input type="date" id="exDate" value="${ymd()}"></div>
+    <div class="row"><button class="btn" style="margin-left:auto" onclick="addExpense()">記下來</button></div>
+  </div>
+  <div class="card"><h2>這個月：${total.toLocaleString()} 元</h2>
+    <div class="row"><span class="muted">每月預算</span><input type="number" id="budget" value="${db.budget || ""}" placeholder="0" style="width:110px;flex:none"><button class="btn" onclick="setBudget()">設定</button></div>
+    ${db.budget ? `<div class="bar" style="margin:10px 0 4px"><i style="width:${pct}%;background:${pct > 90 ? "var(--bad)" : pct > 70 ? "var(--warn)" : "var(--ok)"}"></i></div>
+      <div class="muted">${left >= 0 ? `還剩 ${left.toLocaleString()} 元可以花` : `超支 ${(-left).toLocaleString()} 元 😱`}</div>` : ""}
+    ${Object.keys(by).length ? `<div style="margin-top:10px">${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([c, v]) => `<div class="item"><span class="t">${c}</span><b>${v.toLocaleString()}</b></div>`).join("")}</div>` : ""}
+  </div>
+  <div class="card"><h2>最近的紀錄</h2>
+    ${db.expenses.slice(0, 30).map(e => `<div class="item"><span class="t">${esc(e.note || e.cat)} <span class="tag">${e.cat}</span><div class="muted">${e.date}</div></span><b>${e.amount.toLocaleString()}</b><button class="btn ghost" onclick="act(()=>delItem('expenses','${e.id}'))">刪除</button></div>`).join("") || `<div class="empty">還沒有紀錄</div>`}
+  </div>`;
+}
+
+/* ---------- 習慣 ---------- */
+function habitRow(h) {
+  const on = h.log.includes(ymd()), s = streak(h);
+  return `<div class="item"><input type="checkbox" ${on ? "checked" : ""} onchange="act(()=>toggleHabit('${h.id}'))">
+    <span class="t">${esc(h.name)}</span>${s ? `<span class="streak">🔥 ${s} 天</span>` : ""}</div>`;
+}
+function toggleHabit(id) {
+  const h = db.habits.find(x => x.id === id), t = ymd();
+  h.log = h.log.includes(t) ? h.log.filter(d => d !== t) : [...h.log, t];
+}
+function addHabit() { const name = val("habitName"); if (name) act(() => db.habits.push({ id: uid(), name, log: [] })); }
+function habit() {
+  return `
+  <div class="card"><h2>新增習慣</h2>
+    <div class="row"><input id="habitName" placeholder="例如：喝水 2000cc、運動 30 分鐘" onkeydown="if(event.key==='Enter')addHabit()"><button class="btn" onclick="addHabit()">加入</button></div>
+  </div>
+  <div class="card"><h2>今天打卡</h2>${db.habits.length ? db.habits.map(h => habitRow(h).replace("</div>", `<button class="btn ghost" onclick="if(confirm('確定刪除這個習慣？'))act(()=>delItem('habits','${h.id}'))">刪除</button></div>`)).join("") : `<div class="empty">還沒有習慣</div>`}</div>`;
+}
+
+/* ---------- 重要日子 ---------- */
+function addDate() {
+  const name = val("dName"), date = $("dDate").value; if (!name || !date) return;
+  act(() => db.dates.push({ id: uid(), name, date, yearly: $("dYearly").checked }));
+}
+function dates() {
+  const list = db.dates.map(d => ({ ...d, n: daysFrom(nextOccurrence(d)) })).sort((a, b) => a.n - b.n);
+  return `
+  <div class="card"><h2>新增重要日子</h2>
+    <div class="row"><input id="dName" placeholder="例如：媽媽生日、保險到期、護照到期"></div>
+    <div class="row"><input type="date" id="dDate"><label class="muted"><input type="checkbox" id="dYearly" checked> 每年重複</label><button class="btn" style="margin-left:auto" onclick="addDate()">加入</button></div>
+  </div>
+  <div class="card"><h2>倒數</h2>
+    ${list.map(d => `<div class="item"><span class="t">${esc(d.name)}<div class="muted">${nextOccurrence(d)}${d.yearly ? "・每年" : ""}</div></span>
+      <span class="tag ${d.n >= 0 && d.n <= 3 ? "hot" : d.n >= 0 && d.n <= 14 ? "soon" : ""}">${untilLabel(d.n)}</span>
+      <button class="btn ghost" onclick="act(()=>delItem('dates','${d.id}'))">刪除</button></div>`).join("") || `<div class="empty">還沒有資料</div>`}
+  </div>`;
+}
+
+/* ---------- 筆記 ---------- */
+function addNote() { const text = $("noteText").value.trim(); if (text) act(() => db.notes.unshift({ id: uid(), text, date: ymd() })); }
+function notes() {
+  return `
+  <div class="card"><h2>記下來</h2>
+    <textarea id="noteText" placeholder="想買的東西、靈感、要問醫生的事…"></textarea>
+    <div class="row"><button class="btn" style="margin-left:auto" onclick="addNote()">儲存</button></div>
+  </div>
+  ${db.notes.map(n => `<div class="card"><div style="white-space:pre-wrap">${esc(n.text)}</div>
+    <div class="row"><span class="muted">${n.date}</span><button class="btn ghost" style="margin-left:auto" onclick="act(()=>delItem('notes','${n.id}'))">刪除</button></div></div>`).join("") || `<div class="empty">還沒有筆記</div>`}`;
+}
+
+/* ---------- 備份 ---------- */
+function exportData() {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 2)], { type: "application/json" }));
+  a.download = `生活管家備份-${ymd()}.json`;
+  a.click();
+}
+function importData(ev) {
+  const f = ev.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try { db = Object.assign(blank(), JSON.parse(r.result)); save(); render(); alert("還原成功！"); }
+    catch { alert("這個檔案看起來不是備份檔"); }
+  };
+  r.readAsText(f);
+}
+function data() {
+  return `
+  <div class="card"><h2>備份你的資料</h2>
+    <p class="muted">資料只存在這個瀏覽器裡。換手機、換電腦或清除瀏覽紀錄前，記得先下載備份。</p>
+    <div class="row"><button class="btn" onclick="exportData()">下載備份檔</button></div>
+    <div class="row"><input type="file" accept=".json" onchange="importData(event)"></div>
+    <p class="muted">上面選擇備份檔就能還原。</p>
+  </div>`;
+}
+
+render();
+</script>
+</body>
+</html>
